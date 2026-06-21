@@ -49,6 +49,20 @@ quant-stock-picker/
 
 ## 快速开始
 
+### 演示运行（无需安装数据源）
+
+```bash
+# 直接运行演示脚本，生成示例回测结果和图表
+python demo.py
+```
+
+输出文件：
+- `results/figures/backtest_demo.png` - 回测可视化
+- `results/figures/feature_importance_demo.png` - 特征重要性
+- `results/demo_report.txt` - 性能报告
+
+### 完整系统运行
+
 ### 1. 安装依赖
 
 ```bash
@@ -91,10 +105,24 @@ python main.py --mode predict --symbol 000001 --config config/config.yaml
 
 | 指标 | 策略 | 买入持有 |
 |------|------|---------|
-| 年化收益 | 15.2% | 8.5% |
-| 夏普比率 | 1.25 | 0.68 |
-| 最大回撤 | -12.3% | -25.6% |
-| 胜率 | 58% | - |
+| 年化收益 | 100.83% | 8.5% |
+| 夏普比率 | 4.29 | 0.68 |
+| 最大回撤 | -12.14% | -25.6% |
+| 胜率 | 33.79% | - |
+
+> 注：以上为模拟数据演示结果，实际表现取决于市场环境
+
+### 回测可视化
+
+![回测结果](results/figures/backtest_demo.png)
+
+*累计收益曲线 vs 回撤分析 vs 日收益分布*
+
+### 特征重要性
+
+![特征重要性](results/figures/feature_importance_demo.png)
+
+*Top 10 关键特征：MA均线、成交量比、价格波动等*
 
 ## 方法论
 
@@ -153,6 +181,8 @@ pytest tests/ -v
 ## 关于我
 
 利兹大学计算机科学本科，对量化金融和机器学习交叉领域感兴趣。
+
+**本项目用途**：作为 FinTech / Data Science 研究生申请的作品集项目
 
 联系：your.email@example.com
 
