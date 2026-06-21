@@ -1,0 +1,61 @@
+# Quant Stock Picker - Configuration
+# 智能量化选股系统配置文件
+
+# 数据配置
+data:
+  market: "A_share"           # 市场: A_share, US, HK
+  source: "akshare"           # 数据源: akshare, yfinance, tushare
+  symbols:                    # 股票列表
+    - "000001"                # 平安银行
+    - "000002"                # 万科A
+    - "000858"                # 五粮液
+    - "002415"                # 海康威视
+    - "600519"                # 贵州茅台
+  lookback_days: 730          # 回溯天数(约2年)
+
+# 模型配置
+model:
+  type: "xgboost"             # 模型类型: xgboost, random_forest, lightgbm
+  prediction_horizon: 5       # 预测周期(天数)
+  
+  # XGBoost 参数
+  xgboost_params:
+    n_estimators: 100
+    max_depth: 5
+    learning_rate: 0.1
+    subsample: 0.8
+    colsample_bytree: 0.8
+    random_state: 42
+    eval_metric: "logloss"
+  
+  # Random Forest 参数
+  random_forest_params:
+    n_estimators: 100
+    max_depth: 10
+    random_state: 42
+  
+  # LightGBM 参数
+  lightgbm_params:
+    n_estimators: 100
+    max_depth: 5
+    learning_rate: 0.1
+    random_state: 42
+
+# 回测配置
+backtest:
+  initial_capital: 100000     # 初始资金(元)
+  signal_threshold: 0.6      # 买入信号阈值(概率 > 此值则买入)
+  commission_rate: 0.0005     # 手续费率(双边)
+  slippage: 0.001            # 滑点
+
+# 输出配置
+output:
+  data_dir: "data/processed"  # 处理后数据目录
+  model_dir: "models"          # 模型保存目录
+  figure_dir: "results/figures" # 图表目录
+  report_dir: "results"        # 报告目录
+
+# 日志配置
+logging:
+  level: "INFO"              # 日志级别: DEBUG, INFO, WARNING, ERROR
+  format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
