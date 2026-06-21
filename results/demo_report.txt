@@ -1,0 +1,19 @@
+============================================================
+Quant Stock Picker - Backtest Report
+============================================================
+
+Generated: 2026-06-21 09:51:58
+
+Performance Metrics:
+----------------------------------------
+Total Return:           234.14%
+Annualized Return:      100.83%
+Volatility:              22.81%
+Sharpe Ratio:             4.29
+Max Drawdown:           -12.14%
+Win Rate:                33.79%
+Profit/Loss Ratio:        1.96
+Total Trades:              106
+Final Capital:      334,140.35
+
+============================================================
