@@ -1,14 +1,34 @@
 """
-回测框架模块
-模拟真实交易，计算策略收益和风险指标
+回测框架模块 - 重构版
+支持Walk-Forward验证、基准对比、风险指标
+
+Author: jingke
+Date: 2026-06-24
 """
 
 import logging
-from typing import Optional, Dict, List
+from typing import Optional, Dict, List, Tuple
+from dataclasses import dataclass
 import pandas as pd
 import numpy as np
 
 logger = logging.getLogger("quant_stock_picker")
+
+
+@dataclass
+class BacktestMetrics:
+    """回测指标数据类"""
+    total_return: float
+    annualized_return: float
+    volatility: float
+    sharpe_ratio: float
+    max_drawdown: float
+    win_rate: float
+    profit_loss_ratio: float
+    total_trades: int
+    final_capital: float
+    var_95: float  # 风险价值
+    cvar_95: float  # 条件风险价值
 
 
 class Backtester:
@@ -17,13 +37,14 @@ class Backtester:
     
     功能:
     - 模拟交易执行
-    - 计算收益曲线
-    - 评估风险指标（夏普比率、最大回撤等）
+    - Walk-Forward交叉验证
+    - 基准对比（买入持有/指数）
+    - 风险指标（夏普、回撤、VaR、CVaR）
     """
     
     def __init__(self, initial_capital: float = 100000.0,
                  commission_rate: float = 0.0005,
-                 slippage: float = 0.001):
+                 slippage: float = 0.001) -> None:
         """
         初始化回测器
         
@@ -32,19 +53,19 @@ class Backtester:
             commission_rate: 手续费率（双边）
             slippage: 滑点
         """
-        self.initial_capital = initial_capital
-        self.commission_rate = commission_rate
-        self.slippage = slippage
+        self.initial_capital: float = initial_capital
+        self.commission_rate: float = commission_rate
+        self.slippage: float = slippage
         
         # 状态变量
-        self.capital = initial_capital
-        self.position = 0.0  # 持仓数量
-        self.trades = []  # 交易记录
-        self.daily_values = []  # 每日市值
+        self.capital: float = initial_capital
+        self.position: float = 0.0
+        self.trades: List[Dict] = []
+        self.daily_values: List[float] = []
         
         logger.info(f"回测器初始化: 初始资金={initial_capital:,.0f}")
     
-    def reset(self):
+    def reset(self) -> None:
         """重置状态"""
         self.capital = self.initial_capital
         self.position = 0.0
@@ -76,11 +97,8 @@ class Backtester:
             
             # 执行交易
             if signal == 1 and self.position == 0:
-                # 买入信号且空仓 -> 全仓买入
                 self._buy(current_price, result_df.index[i])
-                
             elif signal == 0 and self.position > 0:
-                # 卖出信号且持仓 -> 全部卖出
                 self._sell(current_price, result_df.index[i])
             
             # 计算当前市值
@@ -89,8 +107,6 @@ class Backtester:
         
         result_df['portfolio_value'] = portfolio_values
         result_df['returns'] = result_df['portfolio_value'].pct_change()
-        
-        # 计算累计收益
         result_df['cumulative_return'] = (
             result_df['portfolio_value'] / self.initial_capital - 1
         )
@@ -100,16 +116,130 @@ class Backtester:
         
         return result_df
     
-    def _buy(self, price: float, timestamp):
-        """执行买入"""
-        # 考虑滑点
-        executed_price = price * (1 + self.slippage)
+    def run_walk_forward(self, df: pd.DataFrame, model, 
+                         feature_cols: List[str],
+                         train_size: int = 252,
+                         test_size: int = 63,
+                         signal_threshold: float = 0.6) -> pd.DataFrame:
+        """
+        Walk-Forward交叉验证
         
-        # 计算可买入数量（扣除手续费）
+        避免前视偏差，用历史数据训练，未来数据测试
+        
+        Args:
+            df: 完整数据
+            model: 模型实例
+            feature_cols: 特征列
+            train_size: 训练窗口大小（天数）
+            test_size: 测试窗口大小（天数）
+            signal_threshold: 信号阈值
+        
+        Returns:
+            回测结果DataFrame
+        """
+        logger.info(f"开始Walk-Forward验证: train={train_size}, test={test_size}")
+        
+        self.reset()
+        all_results = []
+        
+        n_samples = len(df)
+        start_idx = 0
+        window = 0
+        
+        while start_idx + train_size + test_size <= n_samples:
+            window += 1
+            train_start = start_idx
+            train_end = start_idx + train_size
+            test_start = train_end
+            test_end = test_start + test_size
+            
+            # 分割数据
+            train_df = df.iloc[train_start:train_end]
+            test_df = df.iloc[test_start:test_end]
+            
+            # 训练
+            X_train = train_df[feature_cols].values
+            y_train = train_df['target'].values
+            
+            model.build_model()
+            model.train(X_train, y_train)
+            
+            # 预测
+            X_test = test_df[feature_cols].values
+            _, y_prob = model.predict(X_test)
+            
+            # 生成信号
+            test_df = test_df.copy()
+            test_df['signal'] = (y_prob > signal_threshold).astype(int)
+            
+            # 回测这个窗口
+            for i in range(len(test_df)):
+                price = test_df['close'].iloc[i]
+                signal = test_df['signal'].iloc[i]
+                
+                if signal == 1 and self.position == 0:
+                    self._buy(price, test_df.index[i])
+                elif signal == 0 and self.position > 0:
+                    self._sell(price, test_df.index[i])
+                
+                value = self._calculate_value(price)
+                self.daily_values.append(value)
+            
+            all_results.append(test_df)
+            start_idx += test_size
+            
+            logger.info(f"  窗口 {window}: {train_start}-{test_end}")
+            
+            # 记录窗口结束时的市值
+            final_price = test_df['close'].iloc[-1]
+            final_value = self.capital + self.position * final_price
+            logger.info(f"    窗口结束市值: {final_value:,.2f}")
+        
+        # 合并结果
+        if all_results:
+            result_df = pd.concat(all_results, ignore_index=True)
+            result_df['portfolio_value'] = self.daily_values[:len(result_df)]
+            result_df['returns'] = result_df['portfolio_value'].pct_change()
+            result_df['cumulative_return'] = (
+                result_df['portfolio_value'] / self.initial_capital - 1
+            )
+            return result_df
+        else:
+            return df.copy()
+    
+    def run_benchmark(self, df: pd.DataFrame, 
+                     price_col: str = 'close') -> pd.DataFrame:
+        """
+        基准策略回测（买入持有）
+        
+        Args:
+            df: 价格数据
+            price_col: 价格列名
+        
+        Returns:
+            基准回测结果
+        """
+        logger.info("计算基准策略（买入持有）...")
+        
+        result_df = df.copy()
+        initial_price = result_df[price_col].iloc[0]
+        
+        # 买入持有：第一天全仓买入，持有到期
+        result_df['benchmark_value'] = (
+            result_df[price_col] / initial_price * self.initial_capital
+        )
+        result_df['benchmark_return'] = (
+            result_df['benchmark_value'] / self.initial_capital - 1
+        )
+        
+        return result_df
+    
+    def _buy(self, price: float, timestamp) -> None:
+        """执行买入"""
+        executed_price = price * (1 + self.slippage)
         max_amount = self.capital / (1 + self.commission_rate)
         shares = max_amount / executed_price
         
-        # 更新状态
         cost = shares * executed_price
         commission = cost * self.commission_rate
         self.capital -= (cost + commission)
@@ -124,19 +254,13 @@ class Backtester:
             'commission': commission,
             'capital_after': self.capital
         })
-        
-        logger.debug(f"买入: 价格={executed_price:.2f}, 数量={shares:.2f}")
     
-    def _sell(self, price: float, timestamp):
+    def _sell(self, price: float, timestamp) -> None:
         """执行卖出"""
-        # 考虑滑点
         executed_price = price * (1 - self.slippage)
-        
-        # 计算收入
         revenue = self.position * executed_price
         commission = revenue * self.commission_rate
         
-        # 更新状态
         self.capital += (revenue - commission)
         self.position = 0.0
         
@@ -149,15 +273,13 @@ class Backtester:
             'commission': commission,
             'capital_after': self.capital
         })
-        
-        logger.debug(f"卖出: 价格={executed_price:.2f}, 收入={revenue:.2f}")
     
     def _calculate_value(self, current_price: float) -> float:
         """计算当前总市值"""
         position_value = self.position * current_price
         return self.capital + position_value
     
-    def calculate_metrics(self, result_df: pd.DataFrame) -> dict:
+    def calculate_metrics(self, result_df: pd.DataFrame) -> BacktestMetrics:
         """
         计算回测指标
         
@@ -165,15 +287,13 @@ class Backtester:
             result_df: 回测结果DataFrame
         
         Returns:
-            指标字典
+            BacktestMetrics指标对象
         """
         returns = result_df['returns'].dropna()
         portfolio_values = result_df['portfolio_value']
         
         # 基础收益指标
         total_return = (portfolio_values.iloc[-1] / self.initial_capital - 1) * 100
-        
-        # 年化收益（假设252个交易日）
         n_days = len(result_df)
         annualized_return = ((portfolio_values.iloc[-1] / self.initial_capital) ** 
                             (252 / n_days) - 1) * 100 if n_days > 0 else 0
@@ -202,27 +322,35 @@ class Backtester:
         avg_loss = abs(returns[returns < 0].mean()) if (returns < 0).any() else 1
         profit_loss_ratio = avg_win / avg_loss if avg_loss != 0 else 0
         
-        # 交易统计
-        n_trades = len(self.trades)
+        # VaR (95%)
+        var_95 = float(np.percentile(returns.dropna(), 5) * 100)
         
-        metrics = {
-            'total_return': total_return,
-            'annualized_return': annualized_return,
-            'volatility': volatility,
-            'sharpe_ratio': sharpe_ratio,
-            'max_drawdown': max_drawdown,
-            'win_rate': win_rate,
-            'profit_loss_ratio': profit_loss_ratio,
-            'total_trades': n_trades,
-            'final_capital': portfolio_values.iloc[-1]
-        }
+        # CVaR (95%) - 条件风险价值
+        cvar_95 = float(returns[returns <= np.percentile(returns.dropna(), 5)].mean() * 100)
+        
+        metrics = BacktestMetrics(
+            total_return=total_return,
+            annualized_return=annualized_return,
+            volatility=volatility,
+            sharpe_ratio=sharpe_ratio,
+            max_drawdown=max_drawdown,
+            win_rate=win_rate,
+            profit_loss_ratio=profit_loss_ratio,
+            total_trades=len(self.trades),
+            final_capital=portfolio_values.iloc[-1],
+            var_95=var_95,
+            cvar_95=cvar_95
+        )
         
         logger.info("回测指标:")
-        for name, value in metrics.items():
-            if isinstance(value, float):
-                logger.info(f"  {name}: {value:.2f}")
-            else:
-                logger.info(f"  {name}: {value}")
+        logger.info(f"  总收益率: {metrics.total_return:.2f}%")
+        logger.info(f"  年化收益率: {metrics.annualized_return:.2f}%")
+        logger.info(f"  波动率: {metrics.volatility:.2f}%")
+        logger.info(f"  夏普比率: {metrics.sharpe_ratio:.2f}")
+        logger.info(f"  最大回撤: {metrics.max_drawdown:.2f}%")
+        logger.info(f"  胜率: {metrics.win_rate:.2f}%")
+        logger.info(f"  VaR(95%): {metrics.var_95:.2f}%")
+        logger.info(f"  CVaR(95%): {metrics.cvar_95:.2f}%")
         
         return metrics
     

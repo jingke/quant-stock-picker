@@ -1,10 +1,13 @@
 """
-数据获取模块
+数据获取模块 - 重构版
 支持A股(AKShare)、美股(Yahoo Finance)等数据源
+
+Author: jingke
+Date: 2026-06-24
 """
 
 import logging
-from typing import Optional
+from typing import Optional, Dict, Any, List
 import pandas as pd
 import numpy as np
 
@@ -20,7 +23,7 @@ class DataFetcher:
     - 美股/港股: Yahoo Finance
     """
     
-    def __init__(self, market: str = 'A_share', data_source: str = 'akshare'):
+    def __init__(self, market: str = 'A_share', data_source: str = 'akshare') -> None:
         """
         初始化数据获取器
         
@@ -28,8 +31,10 @@ class DataFetcher:
             market: 市场类型 ('A_share', 'US', 'HK')
             data_source: 数据源 ('akshare', 'yfinance', 'tushare')
         """
-        self.market = market
-        self.data_source = data_source
+        self.market: str = market
+        self.data_source: str = data_source
+        self._ak: Optional[Any] = None
+        self._yf: Optional[Any] = None
         
         # 延迟导入，避免未安装报错
         if data_source == 'akshare':
@@ -62,24 +67,30 @@ class DataFetcher:
         
         Returns:
             DataFrame with columns: [date, open, high, low, close, volume]
+        
+        Raises:
+            ValueError: 不支持的数据源
+            ConnectionError: 网络连接失败
         """
         logger.info(f"获取 {symbol} 数据: {start_date} - {end_date}")
         
-        if self.data_source == 'akshare':
-            return self._get_akshare_data(symbol, start_date, end_date)
-        elif self.data_source == 'yfinance':
-            return self._get_yfinance_data(symbol, start_date, end_date)
-        else:
-            raise ValueError(f"不支持的数据源: {self.data_source}")
+        try:
+            if self.data_source == 'akshare':
+                return self._get_akshare_data(symbol, start_date, end_date)
+            elif self.data_source == 'yfinance':
+                return self._get_yfinance_data(symbol, start_date, end_date)
+            else:
+                raise ValueError(f"不支持的数据源: {self.data_source}")
+        except Exception as e:
+            logger.error(f"数据获取失败: {e}")
+            raise ConnectionError(f"无法获取 {symbol} 数据: {e}")
     
     def _get_akshare_data(self, symbol: str, start_date: str, end_date: str) -> pd.DataFrame:
         """通过AKShare获取A股数据"""
+        if self._ak is None:
+            raise RuntimeError("AKShare未初始化")
+        
         try:
-            # AKShare格式: 需要添加市场前缀
-            if len(symbol) == 6 and symbol.startswith(('0', '3', '6')):
-                # A股代码标准化
-                pass
-            
             df = self._ak.stock_zh_a_hist(
                 symbol=symbol,
                 period="daily",
@@ -116,6 +127,9 @@ class DataFetcher:
     
     def _get_yfinance_data(self, symbol: str, start_date: str, end_date: str) -> pd.DataFrame:
         """通过Yahoo Finance获取数据"""
+        if self._yf is None:
+            raise RuntimeError("Yahoo Finance未初始化")
+        
         try:
             # 转换日期格式
             start = f"{start_date[:4]}-{start_date[4:6]}-{start_date[6:]}"
@@ -158,7 +172,7 @@ class DataFetcher:
         """
         logger.info(f"获取 {symbol} 财务数据")
         
-        if self.data_source == 'akshare':
+        if self.data_source == 'akshare' and self._ak is not None:
             try:
                 # 获取个股信息
                 stock_info = self._ak.stock_individual_info_em(symbol=symbol)
@@ -181,7 +195,7 @@ class DataFetcher:
         Returns:
             DataFrame with stock list
         """
-        if self.data_source == 'akshare':
+        if self.data_source == 'akshare' and self._ak is not None:
             return self._ak.stock_zh_a_spot_em()
         else:
             raise NotImplementedError("当前数据源不支持股票列表获取")
@@ -198,7 +212,7 @@ class DataFetcher:
         """
         logger.info(f"获取宏观经济数据: {indicator}")
         
-        if self.data_source == 'akshare':
+        if self.data_source == 'akshare' and self._ak is not None:
             try:
                 if indicator == 'cpi':
                     return self._ak.macro_china_cpi()
